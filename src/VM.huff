@@ -1,0 +1,199 @@
+/* Interface */
+#define function setValue(uint256) nonpayable returns ()
+#define function getValue() view returns (uint256)
+
+/* Storage Slots */
+#define constant SELF = FREE_STORAGE_POINTER()
+
+/* Constants */
+#define constant FLAG_CT_DELEGATECALL = 0x00;
+#define constant FLAG_CT_CALL = 0x01;
+#define constant FLAG_CT_STATICCALL = 0x02;
+#define constant FLAG_CT_VALUECALL = 0x03;
+#define constant FLAG_CT_MASK = 0x03;
+#define constant FLAG_EXTENDED_COMMAND = 0x80;
+#define constant FLAG_TUPLE_RETURN = 0x40;
+
+#define constant SHORT_COMMAND_FILL = 0x000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+
+// TODO: refactor the deployment script to allow this to be inlined.
+#define constant CONSTRUCTOR() = {
+    caller [SELF] sstore
+}
+
+
+/**
+ * 0x00:0x20 dynamic array commands 
+ * 0x20:0x40 dynamic array state
+ */
+#define macro EXECUTE() = {
+
+    0x04 calldataload           // [ &commands ]
+    dup1 calldataload           // [ commands.len, &commands ]
+
+    0x00                        // [ i, commands.len, &commands ]
+    swap2                       // [ &commands, commands.len, i]
+    
+loop:
+    0x20 add                    // [ &commands[0], commands.len, i ]
+
+    dup1 calldataload           // [ commands[0], &commands[0], commands.len, i ]
+    __GET_FLAGS()               // [ flags, commands[0], &commands[0], commands.len, i ]
+
+
+    // If extended command is set then the flags are read from the next command word
+    dup1                       // [ flags, flags, commands[0], &commands[0], commands.len, i ]
+    
+    // Extended flags
+    
+    __FLAG_EXTENDED_NOT_SET() not_extended jumpi    
+    // Stack on branch entry [ flags, command, &commands[i], commands.len, i ]
+
+    dup3                       // [ &commands[i], flags, command, &commands[i],, commands.len, i ]
+    calldataload               // [ indices, flags, command, &commands[i], commands.len, i ]
+
+    // increment counter
+    swap4                     // [ i, flags, command, &commands[i], commands.len, indices ]
+    0x01 add                  // [ i+1, flags, command, &commands[i], commands.len, indices ]
+    swap4                     // [ indices, flags, command , &commands[i], commands.len, i ]
+
+    // Reorder so layout is the same after branching
+    swap1                     // [ flags, indices, command, &commands[i], commands.len, i ]
+    swap2                     // [ command, indices, flags, &commands[i], commands.len, i ]
+
+    // exit if
+    end_extended jump
+not_extended:
+    // Stack on branch entry [ flags, command, &commands[i], commands.len, i ]
+    swap1                      // [ command, flags, &commands[i], commands.len, i ]
+    __GET_SHORT_INDICES()      // [ indicies, command, flags, &commands[i], commands.len, i ]
+    swap1                      // [ command, indicies, flags, &commands[i], commands.len, i ]
+
+end_extended:
+
+    swap2                       // [ flags, indicies, command, &commands[i], commands.len, i ]
+    
+    // Use the provided flags and indices to make the correct call
+    EXECUTE_CALL()
+
+    // After branch stack [ call_success ...]
+    call_success jumpi
+    
+    // Call failed - revert
+    // TODO: return error message
+    0x00 dup1 revert
+
+call_success:
+    // TODO: get actual location of return data
+
+}
+
+#define macro EXECUTE_CALL() = takes(3) returns(1) { // TODO: define returns
+    // Initial stack [ flags, indicies, command ]
+
+    // Check is delegatecall
+    __CHECK_CALL_FLAGS_NOT_SET(FLAG_CT_DELEGATECALL) non_delegate_call jumpi
+
+    EXECUTE_SHORT_CALL(delegatecall)
+    end jump
+
+non_delegate_call:
+    // Check is call
+    __CALL_FLAG_NOT_SET(FLAG_CT_CALL) non_call jumpi
+
+    0x00
+    EXECUTE_FULL_CALL()
+    end jump
+
+non_call:
+    // Check is staticcall
+    __CALL_FLAG_NOT_SET(FLAG_CT_STATICCALL) non_static_call jumpi
+
+    EXECUTE_SHOTY_CALL(staticcall)
+    end jump
+
+non_static_call
+    // Check is valuecall
+    // TODO: set value
+    EXECUTE_FULL_CALL()
+    
+    after_call jump
+none:
+    // None - revert invalid call type
+    0x00 dup1 revert
+
+end:
+}
+
+/** Flag extended set
+ *  
+ * @param flags
+ * @return boolean, true if the extended flag is not set 
+ *
+ */
+#define macro __FLAG_EXTENDED_NOT_SET() = takes(1) returns(1) {
+    // Initial stack: [flags] 
+    [FLAG_EXTENDED_COMMAND] and iszero
+}
+
+#define macro __CHECK_CALL_FLAGS_NOT_SET(mask) = takes(1) returns(1) {
+    // Initial stack: [flags] 
+    dup1 [FLAG_CT_MASK] and <mask> iszero
+}
+
+#define macro EXECUTE_FULL_CALL() = takes(0) returns(0) {
+    // Initial stack: [flags, indices, command]
+    BUILD_INPUTS()
+
+}
+
+#define macro EXECUTE_SHORT_CALL(calltype) = takes(0) returns(0) {
+    // Initial stack: [flags, indices, command]
+    BUILD_INPUTS()
+} 
+
+
+#define macro __GET_FLAGS() = takes(1) returns(2) {
+    // Initial stack: [command]
+    dup1 0x20 shl
+}
+
+
+
+#define macro __GET_SHORT_INDICES() = takes(1) returns(2) {
+    // Initial stack: [command]
+    dup1                        // [command, command]  
+    0x28 shl                    // [command << 40, command]
+    [SHORT_COMMAND_FILL] or     // [command << 40 | SCF, command]
+}
+
+
+
+/* Methods */
+#define macro SET_VALUE() = takes (0) returns (0) {
+    0x04 calldataload   // [value]
+    [VALUE_LOCATION]    // [ptr, value]
+    sstore              // []
+}
+
+#define macro GET_VALUE() = takes (0) returns (0) {
+    // Load value from storage.
+    [VALUE_LOCATION]   // [ptr]
+    sload                // [value]
+
+    // Store value in memory.
+    0x00 mstore
+
+    // Return value
+    0x20 0x00 return
+}
+
+#define macro MAIN() = takes (0) returns (0) {
+    // Identify which function is being called.
+    0x00 calldataload 0xE0 shr
+    dup1 __FUNC_SIG(setValue) eq set jumpi
+    dup1 __FUNC_SIG(getValue) eq get jumpi
+
+
+
+}
