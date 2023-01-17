@@ -1,0 +1,103 @@
+
+#define constant IDX_VARIABLE_LENGTH = 0x80;
+#define constant IDX_VALUE_MASK = 0x7F;
+#define constant IDX_END_OF_ARGS = 0xff;
+#define constant IDX_USE_STATE = 0xfe;
+
+#define macro BUILD() = {
+    // Initial stack [&state, selector, indices]
+
+    0x00            // [ free, &state, selector, indices ]
+    dup1            // [ count, free, &state, selector, indices ]
+    dup1            // [ i, count, free, &state, selector, indices ]
+
+loop:
+    dup4 dup1       // [i, indices, i count, free ,&state, selector, indices ]
+    __MASK_BYTE()   // [indices[i], i, count, free, &state, selector, indices ]    
+
+    __IS_END_OF_ARGS() end_loop jumpi    
+
+    __IS_NOT_MASK(IDX_VARIABLE_LENGTH) not_variable_length jumpi
+
+        IS_VARIABLE_LENGTH()
+        variable_branch_end jump
+not_variable_length:
+        IS_NOT_VARIABLE_LENGTH()
+variable_branch_end:
+        // TODO: loop accounting
+end_loop:
+
+    // TODO: Encode the return data
+}
+
+
+#define macro IS_VARIABLE_LENGTH() = {
+    // Initial stack [idx, i, count, free, &state, selector, indices ]
+    __IS_NOT_MASK(IDX_USE_STATE) not_use_state jumpi
+        IS_USE_STATE() // TODO: Implement this
+
+not_use_state:
+    // Initial stack [idx, i, count, free, &state, selector, indices ]
+    // Add the size of the value, rounded up to the next word boundry
+    // plus space for pointer and length
+
+    dup1                    // [ idx, idx, i, count, free, &state, selector, indices ]
+    [IDX_VALUE_MASK] and    // [ idx & 0x7f, i, count, free, &state, selector, indices ]
+    0x5 shl
+    dup5 add mload          // [ arglen, i, count, free, &state, selector, indices ]
+
+    dup1 0x20 mod iszero we_ballin jumpi
+        0x00 dup1 revert
+
+we_ballin:
+    // Stack [ arglen, i, count, free, &state, selector, indices]
+    0x20 add    // [ arglen + 0x20, i, count, free, &state, selector, indices ]
+    swap1       // [ i, arglen + 0x20, count, free, &state, selector, indices ]
+    swap2       // [ count, arglen + 0x20, i, free, &state, selector, indices ]
+    add         // [ count ,i, free, &state, selector, indices ]
+}
+
+#define macro IS_NOT_VARIABLE_LENGTH() = {
+    // Initial stack [idx, i, count, free, &state, selector, indices ]
+    dup1 
+    [IDX_VALUE_MASK] and
+    0x5 shl
+    dup5 add mload
+
+    0x20 eq we_ballin jumpi
+        0x00 dup1 revert
+
+we_ballin:
+    // Stack [ arglen, i, count, free, &state, selector, indices]
+    swap2       // [ count, i, arglen, free, &state, selector, indices ]
+    0x20 add
+    swap2       // [ arglen, i, count, free, &state, selector, indices ]
+
+    pop         // [ i, count, free, &state, selector, indices ]
+    0x01 add    // [ i + 1, count, free, &state, selector, indices ]
+    swap1       // [ count, i + 1, free, &state, selector, indices ]
+} 
+
+
+
+#define macro __MASK_BYTE() = takes(2) returns(1) {
+    // Initial stack [index, indices]
+    0xff            // [ 0xff, index, indices ] 
+    swap1           // [ index, 0xff, indices ]
+    0x03 mul shl    // [ index * 8, indices ]
+    and             // [ indices[i] ]
+}
+
+#define macro __IS_END_OF_ARGS = takes(1) returns(1) {
+    // Initial stack [idx]
+    dup1 [IDX_END_OF_ARGS] eq
+}    
+
+#define macro __IS_NOT_MASK(mask) = takes(1) returns(1) {
+    // Initial stack [idx]
+    dup1 <mask> and iszero
+}
+
+#define macro MEM_COPY() = {
+
+}
