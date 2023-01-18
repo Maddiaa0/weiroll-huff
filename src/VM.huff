@@ -90,31 +90,46 @@ call_success:
 
 }
 
+// Use a linear jump table to reduce branching costs
+#define jumptable CALL_TYPE() {
+    delegate_call standard_call static_call value_call
+}
+
 #define macro EXECUTE_CALL() = takes(3) returns(1) { // TODO: define returns
     // Initial stack [ flags, indicies, command ]
 
-    // Check is delegatecall
-    __CHECK_CALL_FLAGS_NOT_SET(FLAG_CT_DELEGATECALL) non_delegate_call jumpi
+    // Use a jump table to determine jump based on the flag 
+    __tablesize(CALL_TYPE)              // [ tablesize, flags, indicies, command ]
+    __tablestart(CALL_TYPE)             // [ tablestart, tablesize, flags, indicies, command ]
+    
+    // Store table in memory
+    0x00 codecopy                       // [ flags, indicies, command ]
+
+    // Jump to the index in the table
+    __GET_JUMP_TABLE_INDEX()            
+    0x05 shl mload jump  
+
+delegate_call:
 
     EXECUTE_SHORT_CALL(delegatecall)
     end jump
 
-non_delegate_call:
+standard_call:
     // Check is call
-    __CALL_FLAG_NOT_SET(FLAG_CT_CALL) non_call jumpi
+    __CHECK_CALL_FLAG_NOT_SET(FLAG_CT_CALL) non_call jumpi
 
     0x00
     EXECUTE_FULL_CALL()
     end jump
 
-non_call:
+static_call:
     // Check is staticcall
-    __CALL_FLAG_NOT_SET(FLAG_CT_STATICCALL) non_static_call jumpi
+    __CHECK_CALL_FLAG_NOT_SET(FLAG_CT_STATICCALL) non_static_call jumpi
 
     EXECUTE_SHOTY_CALL(staticcall)
     end jump
 
-non_static_call
+value_call:
     // Check is valuecall
     // TODO: set value
     EXECUTE_FULL_CALL()
@@ -136,6 +151,11 @@ end:
 #define macro __FLAG_EXTENDED_NOT_SET() = takes(1) returns(1) {
     // Initial stack: [flags] 
     [FLAG_EXTENDED_COMMAND] and iszero
+}
+
+#define macro __GET_JUMP_TABLE_INDEX() = takes(1) returns(1) {
+    // Initial stack: [flags] 
+    dup1 [FLAG_CT_MASK] and
 }
 
 #define macro __CHECK_CALL_FLAGS_NOT_SET(mask) = takes(1) returns(1) {
@@ -192,10 +212,5 @@ end:
 
 #define macro MAIN() = takes (0) returns (0) {
     // Identify which function is being called.
-    0x00 calldataload 0xE0 shr
-    dup1 __FUNC_SIG(setValue) eq set jumpi
-    dup1 __FUNC_SIG(getValue) eq get jumpi
-
-
-
+    EXECUTE()
 }
